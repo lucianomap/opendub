@@ -1,0 +1,2 @@
+# This file marks this directory as a project root for uv
+# It allows this module to have its own isolated dependencies

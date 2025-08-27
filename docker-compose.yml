@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  opendub:
+    build: .
+    container_name: opendub
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./output:/app/output
+      - ./models:/app/models
+      - ./cache:/root/.cache
+    environment:
+      # Add your API keys here or use .env file
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+      # GPU support (uncomment if using NVIDIA GPU)
+      # - CUDA_VISIBLE_DEVICES=0
+    # Uncomment for GPU support
+    # runtime: nvidia
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+    
+  # Optional: Run CLI version instead of web
+  # opendub-cli:
+  #   build: .
+  #   container_name: opendub-cli
+  #   volumes:
+  #     - ./output:/app/output
+  #     - ./models:/app/models
+  #     - ./cache:/root/.cache
+  #   environment:
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #     - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+  #   entrypoint: ["python", "cli.py"]
+  #   command: ["--help"]

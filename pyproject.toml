@@ -1,0 +1,126 @@
+[project]
+name = "opendub"
+version = "0.1.0"
+description = "Local AI-powered video dubbing that runs 100% on your machine"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }
+]
+license = { text = "MIT" }
+keywords = ["video", "dubbing", "translation", "ai", "whisper", "tts", "youtube"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+dependencies = [
+    # Core media processing
+    "openai-whisper>=20250625",
+    "yt-dlp>=2025.7.21",
+    "ffmpeg-python>=0.2.0",
+    
+    # Fix for Python 3.13 compatibility
+    "numba>=0.61.2",
+    "llvmlite>=0.44.0",
+    
+    # ML/AI frameworks
+    "torch>=2.7.1",
+    "torchaudio>=2.7.1",
+    "transformers>=4.54.1",
+    "accelerate>=1.9.0",
+    
+    # LLM providers
+    "openai>=1.98.0",
+    "anthropic>=0.60.0",
+    "google-genai>=0.9.0",
+    
+    # Audio processing
+    "soundfile>=0.13.1",
+    "scipy>=1.16.1",
+    "librosa>=0.11.0",
+    "audioread>=3.0.1",
+    "pydub>=0.25.1",
+    "sentencepiece>=0.2.0",  # Required for SpeechT5
+    
+    # Web interface
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "pydantic>=2.11.7",
+    
+    # CLI and orchestration
+    "click>=8.1.0",
+    "typer>=0.16.0",
+    
+    # Logging
+    "structlog>=25.4.0",
+]
+
+[project.optional-dependencies]
+# OpenAudio S1-mini support (advanced TTS)
+openaudio = [
+    "datasets>=3.0.0",
+    "sentencepiece>=0.2.0",
+    "protobuf>=4.25.0,<6.0.0",
+]
+
+# Development tools
+dev = [
+    "pytest>=8.4.1",
+    "black>=25.1.0",
+    "ruff>=0.12.5",
+    "mypy>=1.17.1",
+    "ipython>=9.4.0",
+]
+
+# GPU support (CUDA) - install manually with:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+gpu = []
+
+[project.scripts]
+opendub = "cli:main"
+opendub-web = "web:main"
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build_backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E501"]  # Line too long (handled by black)
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "whisper",
+    "yt_dlp",
+    "ffmpeg",
+    "torch",
+    "torchaudio",
+    "transformers",
+    "soundfile",
+    "librosa",
+    "scipy.*",
+]
+ignore_missing_imports = true

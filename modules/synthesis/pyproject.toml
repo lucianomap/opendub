@@ -1,0 +1,31 @@
+[project]
+name = "opendub-synthesis"
+version = "0.1.0"
+description = "OpenAudio S1-mini synthesis module for OpenDub"
+requires-python = ">=3.13"
+dependencies = [
+    # Core ML dependencies (inherit from main project)
+    "torch>=2.7.1",
+    "torchaudio>=2.7.1",
+    "transformers>=4.54.1",
+    "accelerate>=1.9.0",
+    
+    # Fish-speech and OpenAudio specific (pinned versions for compatibility)
+    "fish-speech @ git+https://github.com/fishaudio/fish-speech.git",
+    "datasets==2.18.0",  # Pinned for fish-speech compatibility
+    "protobuf>=3.9.2,<3.20",  # Required by fish-speech
+    "ormsgpack>=1.5.0",
+    
+    # Audio processing (inherit from main project)
+    "soundfile>=0.13.1",
+    "scipy>=1.16.1",
+    "librosa>=0.11.0",
+    "sentencepiece>=0.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build_backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
