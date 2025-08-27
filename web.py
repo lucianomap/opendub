@@ -2,35 +2,31 @@
 """OpenDub Web - Minimal web interface for video dubbing."""
 
 import asyncio
-import json
 import logging
-import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+
+# Add package to path before any local imports
+sys.path.insert(0, str(Path(__file__).parent))
 
 import structlog
 import uvicorn
 from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel
+
+from core.pipeline import DubbingPipeline
+
+# Load environment variables
+load_dotenv()
 
 # Disable numba debug logging globally
 logging.getLogger("numba").setLevel(logging.WARNING)
 logging.getLogger("numba.core").setLevel(logging.WARNING)
-
-# Load environment variables
-load_dotenv()
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
-# Add package to path
-sys.path.insert(0, str(Path(__file__).parent))
-
-from core.pipeline import DubbingPipeline
 
 # Configure logging
 structlog.configure(
@@ -42,7 +38,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
-        structlog.dev.ConsoleRenderer(colors=True)
+        structlog.dev.ConsoleRenderer(colors=True),
     ],
     context_class=dict,
     logger_factory=structlog.stdlib.LoggerFactory(),
@@ -53,6 +49,7 @@ logger = structlog.get_logger(__name__)
 
 # Store pipeline as global (will be initialized in lifespan)
 pipeline = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,12 +64,10 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     # Cleanup if needed
 
+
 # Create FastAPI app with lifespan
 app = FastAPI(
-    title="OpenDub",
-    description="Local video dubbing with AI",
-    version="0.1.0",
-    lifespan=lifespan
+    title="OpenDub", description="Local video dubbing with AI", version="0.1.0", lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -90,20 +85,22 @@ jobs = {}
 
 class DubRequest(BaseModel):
     """Request model for dubbing."""
+
     url: str
-    languages: List[str]
-    source_language: Optional[str] = None
+    languages: list[str]
+    source_language: str | None = None
     whisper_model: str = "base"
     tts_model: str = "auto"
 
 
 class JobStatus(BaseModel):
     """Job status response."""
+
     job_id: str
     status: str  # pending, processing, completed, failed
-    progress: Optional[str] = None
-    results: Optional[dict] = None
-    error: Optional[str] = None
+    progress: str | None = None
+    results: dict | None = None
+    error: str | None = None
 
 
 # Startup event handler removed - now using lifespan context manager
@@ -115,7 +112,7 @@ async def index():
     html_path = Path(__file__).parent / "static" / "index.html"
     if html_path.exists():
         return FileResponse(html_path)
-    
+
     # Return embedded HTML if static file doesn't exist
     return HTMLResponse(content=DEFAULT_HTML)
 
@@ -124,16 +121,16 @@ async def index():
 async def start_dubbing(request: DubRequest, background_tasks: BackgroundTasks):
     """Start a dubbing job."""
     job_id = str(uuid.uuid4())[:8]
-    
+
     # Initialize job status
     jobs[job_id] = {
         "job_id": job_id,
         "status": "pending",
         "progress": "Job queued",
         "results": None,
-        "error": None
+        "error": None,
     }
-    
+
     # Start dubbing in background
     background_tasks.add_task(
         process_dubbing,
@@ -142,9 +139,9 @@ async def start_dubbing(request: DubRequest, background_tasks: BackgroundTasks):
         request.languages,
         request.source_language,
         request.whisper_model,
-        request.tts_model
+        request.tts_model,
     )
-    
+
     logger.info(f"Started job {job_id}")
     return JobStatus(**jobs[job_id])
 
@@ -152,17 +149,17 @@ async def start_dubbing(request: DubRequest, background_tasks: BackgroundTasks):
 async def process_dubbing(
     job_id: str,
     url: str,
-    languages: List[str],
-    source_language: Optional[str],
+    languages: list[str],
+    source_language: str | None,
     whisper_model: str,
-    tts_model: str
+    tts_model: str,
 ):
     """Process dubbing job in background."""
     try:
         # Update status
         jobs[job_id]["status"] = "processing"
         jobs[job_id]["progress"] = "Starting dubbing process..."
-        
+
         # Run dubbing (in thread pool to avoid blocking)
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
@@ -171,16 +168,16 @@ async def process_dubbing(
             url,
             languages,
             source_language,
-            False  # Don't keep intermediates
+            False,  # Don't keep intermediates
         )
-        
+
         # Update job with results
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["progress"] = "Dubbing completed"
         jobs[job_id]["results"] = results
-        
+
         logger.info(f"Job {job_id} completed")
-        
+
     except Exception as e:
         logger.error(f"Job {job_id} failed: {e}")
         jobs[job_id]["status"] = "failed"
@@ -192,7 +189,7 @@ async def get_status(job_id: str):
     """Get job status."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     return JobStatus(**jobs[job_id])
 
 
@@ -201,24 +198,20 @@ async def download_video(job_id: str, language: str):
     """Download dubbed video."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = jobs[job_id]
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job not completed")
-    
+
     videos = job["results"].get("videos", {})
     if language not in videos:
         raise HTTPException(status_code=404, detail="Language not found")
-    
+
     video_path = Path(videos[language])
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
-    
-    return FileResponse(
-        video_path,
-        media_type="video/mp4",
-        filename=f"dubbed_{language}.mp4"
-    )
+
+    return FileResponse(video_path, media_type="video/mp4", filename=f"dubbed_{language}.mp4")
 
 
 @app.get("/api/supported-languages")
@@ -283,13 +276,13 @@ DEFAULT_HTML = """
     <div class="container">
         <h1>🎬 OpenDub</h1>
         <p class="subtitle">Local AI-powered video dubbing</p>
-        
+
         <form id="dubForm">
             <div class="form-group">
                 <label for="url">Video URL</label>
                 <input type="url" id="url" placeholder="https://youtube.com/watch?v=..." required>
             </div>
-            
+
             <div class="form-group">
                 <label>Target Languages</label>
                 <div class="checkbox-group" id="languages">
@@ -319,55 +312,55 @@ DEFAULT_HTML = """
                     </div>
                 </div>
             </div>
-            
+
             <button type="submit" id="submitBtn">Start Dubbing</button>
         </form>
-        
+
         <div id="status"></div>
     </div>
-    
+
     <script>
         const form = document.getElementById('dubForm');
         const statusDiv = document.getElementById('status');
         const submitBtn = document.getElementById('submitBtn');
-        
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const url = document.getElementById('url').value;
             const checkboxes = document.querySelectorAll('#languages input:checked');
             const languages = Array.from(checkboxes).map(cb => cb.value);
-            
+
             if (languages.length === 0) {
                 alert('Please select at least one language');
                 return;
             }
-            
+
             submitBtn.disabled = true;
             statusDiv.innerHTML = '<div class="status processing"><div class="spinner"></div>Starting dubbing process...</div>';
-            
+
             try {
                 const response = await fetch('/api/dub', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url, languages })
                 });
-                
+
                 const job = await response.json();
                 pollStatus(job.job_id);
-                
+
             } catch (error) {
                 statusDiv.innerHTML = `<div class="status failed">Error: ${error.message}</div>`;
                 submitBtn.disabled = false;
             }
         });
-        
+
         async function pollStatus(jobId) {
             const interval = setInterval(async () => {
                 try {
                     const response = await fetch(`/api/status/${jobId}`);
                     const status = await response.json();
-                    
+
                     if (status.status === 'completed') {
                         clearInterval(interval);
                         showResults(status);
@@ -386,13 +379,13 @@ DEFAULT_HTML = """
                 }
             }, 2000);
         }
-        
+
         function showResults(status) {
             const videos = status.results.videos;
-            const downloads = Object.entries(videos).map(([lang, path]) => 
+            const downloads = Object.entries(videos).map(([lang, path]) =>
                 `<a href="/api/download/${status.job_id}/${lang}" class="download-link" download>Download ${lang.toUpperCase()}</a>`
             ).join('');
-            
+
             statusDiv.innerHTML = `
                 <div class="status completed">
                     ✅ Dubbing completed!
@@ -432,7 +425,7 @@ def main():
                 "level": "INFO",
                 "handlers": ["default"],
             },
-        }
+        },
     )
 
 
