@@ -1,12 +1,19 @@
 """Transcribe audio using OpenAI Whisper."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 import structlog
 import torch
 import whisper
+
+# Disable numba debug logging
+logging.getLogger("numba").setLevel(logging.WARNING)
+logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
+logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
+logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
 
 logger = structlog.get_logger(__name__)
 

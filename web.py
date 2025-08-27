@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import uuid
@@ -13,6 +14,10 @@ from typing import List, Optional
 import structlog
 import uvicorn
 from dotenv import load_dotenv
+
+# Disable numba debug logging globally
+logging.getLogger("numba").setLevel(logging.WARNING)
+logging.getLogger("numba.core").setLevel(logging.WARNING)
 
 # Load environment variables
 load_dotenv()

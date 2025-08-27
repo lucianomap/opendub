@@ -2,12 +2,17 @@
 """OpenDub CLI - Local video dubbing with AI."""
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 import click
 import structlog
+
+# Disable numba debug logging globally
+logging.getLogger("numba").setLevel(logging.WARNING)
+logging.getLogger("numba.core").setLevel(logging.WARNING)
 
 # Add package to path
 sys.path.insert(0, str(Path(__file__).parent))
