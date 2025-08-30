@@ -26,6 +26,7 @@ class DubbingPipeline:
         tts_model: str = "auto",
         llm_provider: str | None = None,
         device: str | None = None,
+        varied_narrators: bool = False,
     ):
         """Initialize pipeline with all components.
 
@@ -35,6 +36,7 @@ class DubbingPipeline:
             tts_model: TTS model to use
             llm_provider: LLM provider for translation
             device: Device to use (cuda/cpu)
+            varied_narrators: Use different narrator voices for each segment
         """
         self.output_dir = output_dir or Path(tempfile.gettempdir()) / "opendub"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -43,7 +45,7 @@ class DubbingPipeline:
         self.downloader = VideoDownloader(self.output_dir)
         self.transcriber = WhisperTranscriber(whisper_model, device)
         self.translator = LLMTranslator(llm_provider)
-        self.synthesizer = SpeechSynthesizer(tts_model, device)
+        self.synthesizer = SpeechSynthesizer(tts_model, device, varied_narrators)
         self.stitcher = VideoStitcher()
 
     def dub_video(

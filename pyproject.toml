@@ -47,6 +47,7 @@ dependencies = [
     "audioread>=3.0.1",
     "pydub>=0.25.1",
     "sentencepiece>=0.2.0",  # Required for SpeechT5
+    "ormsgpack>=1.5.0",  # Required for OpenAudio reference voice
     
     # Web interface
     "fastapi>=0.100.0",

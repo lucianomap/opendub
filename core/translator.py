@@ -58,6 +58,28 @@ class LLMTranslator:
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
+    def _get_chunk_size(self) -> int:
+        """Determine appropriate chunk size based on provider and model.
+
+        Returns optimal number of segments to process per API call.
+        """
+        # Conservative defaults to avoid token limits
+        # These can be tuned based on average segment length
+        if self.provider == "openai":
+            if "gpt-4" in self.model_name:
+                return 100  # GPT-4 has larger context
+            else:
+                return 50  # GPT-3.5 and others
+        elif self.provider == "anthropic":
+            return 100  # Claude models have good context
+        elif self.provider == "google":
+            if "flash" in self.model_name.lower():
+                return 80  # Gemini Flash models
+            else:
+                return 100  # Gemini Pro models
+        else:
+            return 50  # Conservative default
+
     def translate(self, transcription: dict, target_language: str) -> dict:
         """Translate transcription to target language.
 
@@ -90,7 +112,9 @@ class LLMTranslator:
         source_lang_name = lang_names.get(source_lang, source_lang)
 
         logger.info(f"Translating from {source_lang_name} to {target_lang_name}")
-        logger.info(f"Processing {len(transcription['segments'])} segments in one shot")
+
+        # Determine chunk size based on provider and model
+        chunk_size = self._get_chunk_size()
 
         # Prepare all segments for translation
         segments_to_translate = []
@@ -111,11 +135,21 @@ class LLMTranslator:
                 "duration": transcription["duration"],
             }
 
-        # Combine all texts for single translation
-        combined_text = "\n".join(segments_to_translate)
+        # Process segments in chunks
+        translations = {}
+        total_segments = len(segments_to_translate)
 
-        # Translate everything in one API call
-        prompt = f"""Translate the following segments from {source_lang_name} to {target_lang_name}.
+        for chunk_start in range(0, total_segments, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, total_segments)
+            chunk = segments_to_translate[chunk_start:chunk_end]
+
+            logger.info(f"Processing segments {chunk_start+1}-{chunk_end} of {total_segments}")
+
+            # Combine chunk texts for translation
+            combined_text = "\n".join(chunk)
+
+            # Translate chunk
+            prompt = f"""Translate the following segments from {source_lang_name} to {target_lang_name}.
 Maintain the tone, style, and meaning. Keep translations concise for video dubbing timing.
 IMPORTANT: Preserve the segment markers [0], [1], etc. in your translation.
 Only return the translated segments, nothing else.
@@ -123,23 +157,22 @@ Only return the translated segments, nothing else.
 Segments to translate:
 {combined_text}"""
 
-        translated_text = self._translate_text_with_retry(prompt)
+            translated_text = self._translate_text_with_retry(prompt)
 
-        # Parse translated results
-        translations = {}
-        translated_lines = translated_text.strip().split("\n")
+            # Parse translated results for this chunk
+            translated_lines = translated_text.strip().split("\n")
 
-        for line in translated_lines:
-            if line.strip() and "[" in line and "]" in line:
-                try:
-                    idx_end = line.index("]")
-                    idx_str = line[1:idx_end]
-                    idx = int(idx_str)
-                    translation = line[idx_end + 1 :].strip()
-                    translations[idx] = translation
-                except (ValueError, IndexError):
-                    logger.warning(f"Failed to parse line: {line}")
-                    continue
+            for line in translated_lines:
+                if line.strip() and "[" in line and "]" in line:
+                    try:
+                        idx_end = line.index("]")
+                        idx_str = line[1:idx_end]
+                        idx = int(idx_str)
+                        translation = line[idx_end + 1 :].strip()
+                        translations[idx] = translation
+                    except (ValueError, IndexError):
+                        logger.warning(f"Failed to parse line: {line}")
+                        continue
 
         # Apply translations to segments
         translated_segments = []
@@ -164,7 +197,9 @@ Segments to translate:
             "duration": transcription["duration"],
         }
 
-        logger.info(f"Translated {len(segment_indices)} segments in a single API call")
+        logger.info(
+            f"Translated {len(segment_indices)} segments in {(total_segments + chunk_size - 1) // chunk_size} API calls"
+        )
 
         return translated
 
@@ -178,7 +213,7 @@ Segments to translate:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.3,
-                        max_tokens=4000,
+                        max_tokens=8000,
                     )
                     return response.choices[0].message.content.strip()
 
@@ -186,7 +221,7 @@ Segments to translate:
                     response = self.client.messages.create(
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt}],
-                        max_tokens=4000,
+                        max_tokens=8000,
                         temperature=0.3,
                     )
                     return response.content[0].text.strip()
@@ -197,7 +232,7 @@ Segments to translate:
                         contents=prompt,
                         config={
                             "temperature": 0.3,
-                            "max_output_tokens": 4000,
+                            "max_output_tokens": 8000,
                         },
                     )
                     if response and response.text:

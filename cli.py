@@ -70,6 +70,11 @@ structlog.configure(
     help="TTS model to use (default: auto)",
 )
 @click.option(
+    "--random-voices",
+    is_flag=True,
+    help="Use different random voices for each segment (fun mode!)",
+)
+@click.option(
     "-p",
     "--llm-provider",
     type=click.Choice(["openai", "anthropic", "google", "auto"]),
@@ -98,6 +103,7 @@ def main(
     output: Path | None,
     whisper_model: str,
     tts_model: str,
+    random_voices: bool,
     llm_provider: str,
     device: str,
     keep_intermediates: bool,
@@ -183,6 +189,7 @@ def main(
             tts_model=tts_model,
             llm_provider=llm_provider,
             device=device,
+            varied_narrators=random_voices,
         )
 
         if not quiet:

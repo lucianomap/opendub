@@ -16,12 +16,15 @@ logger = structlog.get_logger(__name__)
 class SpeechSynthesizer:
     """Synthesize speech from translated text."""
 
-    def __init__(self, model: str = "auto", device: str | None = None):
+    def __init__(
+        self, model: str = "auto", device: str | None = None, varied_narrators: bool = False
+    ):
         """Initialize TTS synthesizer.
 
         Args:
             model: TTS model to use (openaudio or auto)
             device: Device to use (cuda, cpu, or None for auto)
+            varied_narrators: Use different voices for each segment
         """
         import torch
 
@@ -51,7 +54,9 @@ class SpeechSynthesizer:
         if self.model_type == "openaudio" and self.openaudio_available:
             from core.openaudio_synthesizer import OpenAudioSynthesizer
 
-            self.synthesizer = OpenAudioSynthesizer(device=self.device)
+            self.synthesizer = OpenAudioSynthesizer(
+                device=self.device, varied_narrators=varied_narrators
+            )
         else:
             self.synthesizer = None
 

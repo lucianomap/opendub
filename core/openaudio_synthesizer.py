@@ -1,6 +1,7 @@
 """Text-to-speech synthesis using OpenAudio S1-mini model via fish-speech."""
 
 import os
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -35,9 +36,10 @@ class AudioSegment:
 class OpenAudioSynthesizer:
     """TTS synthesizer using OpenAudio S1-mini model via fish-speech."""
 
-    def __init__(self, language: str = "pt", device: str = "cuda"):
+    def __init__(self, language: str = "pt", device: str = "cuda", varied_narrators: bool = False):
         self.language = language
         self.device = device if torch.cuda.is_available() else "cpu"
+        self.varied_narrators = varied_narrators
 
         # Model path - relative to the module file
         module_dir = Path(__file__).parent.parent  # Goes up to project root
@@ -50,6 +52,9 @@ class OpenAudioSynthesizer:
 
         # Check if API server is running
         self.api_available = self._check_api_server()
+        self.server_process = None  # Track server process for restart
+        self.restart_attempts = 0
+        self.max_restart_attempts = 3
 
         if not self.api_available:
             logger.warning(f"OpenAudio API server not running at {self.api_url}")
@@ -67,7 +72,10 @@ class OpenAudioSynthesizer:
         self.self_reference_audio = None
         self.self_reference_text = None
 
-        logger.info("Self-referencing mode: Will use first segment's voice for consistency")
+        if varied_narrators:
+            logger.info("Random voices mode: Each segment will have a unique voice")
+        else:
+            logger.info("Self-referencing mode: Will use first segment's voice for consistency")
 
     def _check_api_server(self) -> bool:
         """Check if the fish-speech API server is running."""
@@ -75,6 +83,77 @@ class OpenAudioSynthesizer:
             response = requests.get(f"{self.api_url}/v1/health", timeout=1)
             return response.status_code == 200
         except Exception:
+            return False
+
+    def _restart_api_server(self) -> bool:
+        """Attempt to restart the API server."""
+
+        if self.restart_attempts >= self.max_restart_attempts:
+            logger.error(f"Max restart attempts ({self.max_restart_attempts}) reached")
+            return False
+
+        self.restart_attempts += 1
+        logger.info(
+            f"Attempting to restart API server (attempt {self.restart_attempts}/{self.max_restart_attempts})"
+        )
+
+        # Kill existing server if running
+        if self.server_process:
+            try:
+                self.server_process.terminate()
+                self.server_process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.server_process.kill()
+                except Exception:
+                    pass
+            self.server_process = None
+
+        # Also try to kill any orphaned processes on the port
+        try:
+            subprocess.run(["fuser", "-k", f"{self.api_port}/tcp"], capture_output=True)
+            time.sleep(2)  # Give time for port to be released
+        except Exception:
+            pass
+
+        # Start new server
+        try:
+            env = os.environ.copy()
+            env["OPENAUDIO_PORT"] = str(self.api_port)
+
+            self.server_process = subprocess.Popen(
+                ["bash", "scripts/start_openaudio_server.sh", str(self.api_port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=Path(__file__).parent.parent,
+                env=env,
+            )
+
+            # Wait for server to be ready (max 60 seconds)
+            for i in range(60):
+                if self.server_process.poll() is not None:
+                    # Process died
+                    stderr = (
+                        self.server_process.stderr.read() if self.server_process.stderr else b""
+                    )
+                    logger.error(f"Server process died: {stderr.decode('utf-8', errors='ignore')}")
+                    return False
+
+                if self._check_api_server():
+                    logger.info(f"API server restarted successfully on port {self.api_port}")
+                    self.api_available = True
+                    return True
+
+                if i % 10 == 0 and i > 0:
+                    logger.debug(f"Waiting for API server restart... ({i}/60s)")
+
+                time.sleep(1)
+
+            logger.error("API server failed to restart in time")
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to restart API server: {e}")
             return False
 
     def synthesize_segments(self, segments: list[dict]) -> list[AudioSegment]:
@@ -107,8 +186,12 @@ class OpenAudioSynthesizer:
                         segment["text"], is_first_segment=(idx == 0)
                     )
                     if audio_array is not None:
-                        # For self-referencing: save first segment as reference
-                        if idx == 0 and self.self_reference_audio is None:
+                        # For self-referencing: save first segment as reference (unless varied_narrators is enabled)
+                        if (
+                            idx == 0
+                            and self.self_reference_audio is None
+                            and not self.varied_narrators
+                        ):
                             self._save_as_self_reference(audio_array, segment["text"])
                     else:
                         # API failed, use fallback
@@ -168,83 +251,126 @@ class OpenAudioSynthesizer:
         except Exception as e:
             logger.warning(f"Failed to save self-reference: {e}")
 
-    def _synthesize_with_api(self, text: str, is_first_segment: bool = False) -> np.ndarray | None:
-        """Synthesize audio using the fish-speech API."""
-        try:
-            # Don't include language tag in the text - it gets spoken!
-            formatted_text = text
+    def _synthesize_with_api(
+        self, text: str, is_first_segment: bool = False, retry_count: int = 3
+    ) -> np.ndarray | None:
+        """Synthesize audio using the fish-speech API with retry logic."""
+        last_error = None
 
-            # Prepare request based on voice mode
-            if self.self_reference_audio and not is_first_segment and ormsgpack:
-                # Self-referencing mode: Use first segment's voice for consistency
-                payload = {
-                    "text": formatted_text,
-                    "format": "wav",
-                    "normalize": False,
-                    "latency": "normal",
-                    "references": [
-                        {
-                            "audio": self.self_reference_audio,
-                            "text": self.self_reference_text,
-                        }
-                    ],
-                }
+        for attempt in range(retry_count):
+            try:
+                # Check API health before attempting
+                if not self.api_available and not self._check_api_server():
+                    logger.warning("API server not available, attempting restart...")
+                    if not self._restart_api_server():
+                        logger.error("Failed to restart API server")
+                        return None
+                    # Give server a moment to stabilize after restart
+                    time.sleep(2)
 
-                response = requests.post(
-                    f"{self.api_url}/v1/tts",
-                    data=ormsgpack.packb(payload),
-                    headers={
-                        "content-type": "application/msgpack",
-                        "model": "s1-mini",
-                    },
-                    timeout=60,
-                )
-            else:
-                # First segment or fallback
-                logger.info(
-                    "Generating first segment to establish reference voice"
-                    if is_first_segment
-                    else "No reference available"
-                )
-                payload = {"text": formatted_text, "format": "wav"}
-                response = requests.post(
-                    f"{self.api_url}/v1/tts",
-                    json=payload,
-                    headers={"model": "s1-mini"},
-                    timeout=60,
-                )
+                # Don't include language tag in the text - it gets spoken!
+                formatted_text = text
 
-            if response.status_code == 200:
-                # Save response content to temporary file
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_file.write(response.content)
-                    tmp_path = tmp_file.name
+                # Prepare request based on voice mode
+                if (
+                    self.self_reference_audio
+                    and not is_first_segment
+                    and ormsgpack
+                    and not self.varied_narrators
+                ):
+                    # Self-referencing mode: Use first segment's voice for consistency
+                    payload = {
+                        "text": formatted_text,
+                        "format": "wav",
+                        "normalize": False,
+                        "latency": "normal",
+                        "references": [
+                            {
+                                "audio": self.self_reference_audio,
+                                "text": self.self_reference_text,
+                            }
+                        ],
+                    }
 
-                try:
-                    # Load the generated audio
-                    waveform, sample_rate = sf.read(tmp_path)
+                    response = requests.post(
+                        f"{self.api_url}/v1/tts",
+                        data=ormsgpack.packb(payload),
+                        headers={
+                            "content-type": "application/msgpack",
+                            "model": "s1-mini",
+                        },
+                        timeout=30,  # Reduced timeout to fail faster
+                    )
+                else:
+                    # First segment or fallback
+                    logger.info(
+                        "Generating first segment to establish reference voice"
+                        if is_first_segment
+                        else "No reference available"
+                    )
+                    payload = {"text": formatted_text, "format": "wav"}
+                    response = requests.post(
+                        f"{self.api_url}/v1/tts",
+                        json=payload,
+                        headers={"model": "s1-mini"},
+                        timeout=30,  # Reduced timeout to fail faster
+                    )
 
-                    # Convert to expected sample rate if needed
-                    if sample_rate != self.sample_rate:
-                        from scipy import signal
+                if response.status_code == 200:
+                    # Save response content to temporary file
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
 
-                        waveform = signal.resample(
-                            waveform, int(len(waveform) * self.sample_rate / sample_rate)
-                        )
+                    try:
+                        # Load the generated audio
+                        waveform, sample_rate = sf.read(tmp_path)
 
-                    return waveform
-                finally:
-                    # Clean up temp file
-                    os.unlink(tmp_path)
-            else:
-                logger.error(f"API request failed: {response.status_code}")
-                if response.text:
-                    logger.error(f"Response: {response.text}")
-                return None
+                        # Convert to expected sample rate if needed
+                        if sample_rate != self.sample_rate:
+                            from scipy import signal
 
-        except Exception as e:
-            logger.error(f"Failed to synthesize with API: {e}")
-            return None
+                            waveform = signal.resample(
+                                waveform, int(len(waveform) * self.sample_rate / sample_rate)
+                            )
+
+                        # Reset restart attempts on success
+                        if self.restart_attempts > 0:
+                            logger.info("API server recovered, resetting restart counter")
+                            self.restart_attempts = 0
+
+                        return waveform
+                    finally:
+                        # Clean up temp file
+                        os.unlink(tmp_path)
+                else:
+                    logger.error(f"API request failed: {response.status_code}")
+                    if response.text:
+                        logger.error(f"Response: {response.text}")
+                    last_error = f"HTTP {response.status_code}"
+
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"API timeout on attempt {attempt + 1}/{retry_count}: {e}")
+                last_error = e
+                self.api_available = False  # Mark as unavailable to trigger restart
+
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(f"API connection error on attempt {attempt + 1}/{retry_count}: {e}")
+                last_error = e
+                self.api_available = False  # Mark as unavailable to trigger restart
+
+            except Exception as e:
+                logger.error(f"Unexpected error on attempt {attempt + 1}/{retry_count}: {e}")
+                last_error = e
+
+            # If not the last attempt, wait before retrying
+            if attempt < retry_count - 1:
+                wait_time = min(2**attempt, 10)  # Exponential backoff, max 10s
+                logger.info(f"Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+
+        logger.error(f"Failed to synthesize after {retry_count} attempts. Last error: {last_error}")
+        return None
 
     def _generate_fallback_audio(self, segment: dict) -> np.ndarray:
         """Generate fallback audio (sine wave) when API is not available."""
@@ -304,3 +430,16 @@ class OpenAudioSynthesizer:
         """Clean up resources."""
         if self.device == "cuda":
             torch.cuda.empty_cache()
+
+        # Clean up server process if we started it
+        if self.server_process:
+            try:
+                logger.info("Stopping OpenAudio API server...")
+                self.server_process.terminate()
+                self.server_process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.server_process.kill()
+                except Exception:
+                    pass
+            self.server_process = None
